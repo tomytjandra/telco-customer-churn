@@ -1,0 +1,248 @@
+---
+title: "Customer Churn Prediction"
+author: "Tomy Tjandra"
+date: "2 Agustus 2021"
+output: 
+  rmdformats::downcute:
+    df_print: paged
+    css: assets/style.css
+---
+
+```{r setup, include=FALSE}
+# clear-up the environment
+rm(list = ls())
+
+# chunk options
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  comment = "#>",
+  echo = TRUE
+)
+
+# scientific notation
+options(scipen = 9999)
+```
+
+```{r message=F, warning=F, echo=FALSE}
+library(tidyverse)
+library(rsample)
+library(MLmetrics)
+library(inspectdf)
+library(caret)
+library(ROCR)
+```
+
+# Background
+
+Kamu pasti pernah merasa kurang puas dengan sebuah perusahaan telekomunikasi dan akhirnya memutuskan pindah ke perusahaan lain? Entah karena harganya terlalu mahal, sinyalnya yang kurang bagus, atau karena pelayanannya yang kurang baik. Nah hal itu disebut dengan *Customer Churn*.
+
+***Customer churn*** didefinisikan sebagai kecenderungan pelanggan untuk berhenti melakukan interaksi dengan sebuah perusahaan. Perusahaan telekomunikasi memiliki kebutuhan untuk mengetahui apakah pelanggan akan berhenti berlangganan atau tidak, karena biaya untuk mempertahankan pelanggan yang sudah ada jauh lebih sedikit dibandingkan memperoleh pelanggan baru.
+
+Perusahaan biasanya mendefinisikan 2 tipe *customer churn*, yaitu *voluntary* dan *involuntary*. ***Voluntary churn*** merupakan pelanggan yang dengan sengaja berhenti dan beralih ke perusahaan lain, sedangkan ***involuntary churn*** merupakan pelanggan yang berhenti karena sebab eksternal seperti berpindah lokasi, kematian, atau alasan lainnya.
+
+Diantara kedua tipe tersebut, *voluntary churn* lah yang tidak sulit untuk dilakukan karena kita dapat mempelajari karakteristik pelanggan yang dapat dilihat dari profil pelanggan. Permasalahan ini dapat dijawab dengan membuat sebuah model *Machine Learning* yang dapat memprediksi apakah seorang pelanggan akan *churn* atau tidak. Harapannya, dengan adanya model ini, pihak perusahaan telekomunikasi dapat melakukan tindak preventif bagi pelanggan yang berpeluang besar untuk *churn*.
+
+# Workflow
+
+## Import Data
+
+Data yang digunakan merupakan data profil pelanggan dari sebuah perusahaan telekomunikasi yang diperoleh dari [Kaggle](https://www.kaggle.com/blastchar/telco-customer-churn). Dataset tersebut berisikan data untuk 7043 pelanggan yang meliputi demografis pelanggan, informasi pembayaran akun, serta produk layanan yang didaftarkan oleh tiap pelanggan. Dari informasi tersebut, kita ingin memprediksi apakah seorang pelanggan akan `Churn` atau tidak.
+
+```{r}
+customer <- read.csv("data_input/Telco-Customer-Churn.csv", stringsAsFactors = T)
+head(customer)
+```
+
+Berikut ini merupakan deskripsi untuk setiap variabel:
+
+-   `CustomerID`: Customer ID
+-   `Gender`: Gender pelanggan yaitu Female dan Male
+-   `SeniorCitizen`: Apakah pelanggan merupakan senio citizen (0: No, 1: Yes)
+-   `Partner`: Apakah pelanggan memiliki partner atau tidak (Yes, No)
+-   `Dependents`: Apakah pelanggan memiliki tanggungan atau tidak (Yes, No)
+-   `Tenure`: Jumlah bulan dalam menggunakan produk perusahaan
+-   `MultipleLines`: Apakah pelanggan memiliki banyak saluran atau tidak (Yes, No, No phone service)
+-   `OnlineSecurity`: Apakah pelanggan memiliki keamanan online atau tidak
+-   `OnlineBackup`: Apakah pelanggan memiliki cadangan online atau tidak
+-   `DeviceProtection`: Apakah pelanggan memiliki perlindungan perangkat atau tidak
+-   `TechSupport`: Apakah pelanggan memiliki dukungan teknis atau tidak
+-   `StreamingTV`: Apakah pelanggan berlangganan TV streaming atau tidak
+-   `StreamingMovies`: Apakah pelanggan berlangganan movies streaming atau tidak
+-   `Contract`: Ketentuan kontrak berlangganan (Month-to-month, One year, Two year)
+-   `PaperlessBilling`: Apakah pelanggan memiliki tagihan tanpa kertas atau tidak (Yes, No)
+-   `PaymentMethod`: Metode pembayaran (Electronic check, Mailed check, Bank transfer (automatic), Credit card (automatic))
+-   `MonthlyCharges`: Jumlah pembayaran yang dilakukan setiap bulan
+-   `TotalCharges`: Jumlah total yang dibebankan oleh pelanggan
+-   `Churn`: Apakah pelanggan Churn atau tidak (Yes or No)
+
+## Data Cleansing
+
+Sebelum masuk ke tahap modeling, mari kita membersihkan datanya terlebih dahulu.
+
+**Pertama**, cek kelengkapan data, dari tahap ini kita akan memperoleh informasi apakah data kita sudah lengkap.
+
+```{r}
+colSums(is.na(customer))
+```
+
+Dari 7043 observasi ternyata terdapat sebanyak 11 observasi pada kolom `TotalCharges` yang merupakan *missing values (NA)*. Dikarenakan jumlah NA yang cukup sedikit, kita dapat membuang observasi tersebut.
+
+**Kedua**, kita perlu buang variabel yang tidak relevan dengan pemodelan, yaitu `CustomerID`.
+
+**Ketiga**, kita menyesuaikan tipe data kolom `SeniorCitizen` yang sebelumnya numerik menjadi kategorik.
+
+```{r}
+customer <- customer %>% 
+            select(-customerID) %>% 
+            na.omit() %>% 
+            mutate(SeniorCitizen = as.factor(SeniorCitizen)) 
+```
+
+## Exploratory Data Analysis
+
+Selanjutnya mari lakukan eksplorasi data baik untuk kolom kategorik maupun numerik.
+
+Untuk mengetahui proporsi kelas pada setiap variabel kategori, kita dapat menggunakan fungsi `inspect_cat` dari *package* `inspectdf` seperti berikut:
+
+```{r}
+customer %>% inspect_cat() %>% show_plot()
+```
+
+Dari visualisasi di atas dapat diketahui proporsi kelas untuk variabel target `Churn` lebih banyak di kategori *No* dibandingkan *Yes*. Lalu, untuk proporsi variabel lainnya mayoritas seimbang.
+
+Berikutnya kita dapat eksplorasi persebaran untuk variabel data numerik dengan fungsi `inspect_num` dari *package* `inspectdf` seperti berikut:
+
+```{r}
+customer %>% inspect_num() %>% show_plot()
+```
+
+Dari visualisasi di atas dapat disimpulkan bahwa persebaran data numerik cukup beragam untuk setiap variabelnya.
+
+## Train-Test Splitting
+
+Setelah kita melakukan *data cleansing* dan eksplorasi data, tahap berikutnya adalah *train-test splitting* yaitu membagi data menjadi data *train* dan *test* dengan proporsi 80:20. Data *train* digunakan untuk membuat model sedangkan data *test* digunakan untuk mengevaluasi performa model.
+
+```{r}
+set.seed(100)
+idx <- initial_split(data = customer,
+                     prop = 0.8,
+                     strata = "Churn")
+data_train <- training(idx)
+data_test <- testing(idx)
+```
+
+## Modeling
+
+Selanjutnya kita akan melakukan *modeling* menggunakan algoritma ***Random Forest*** (*package* `caret`) dengan menentukan banyaknya *cross validation*, repetisi, serta mencantumkan nama target variabel dan juga prediktor yang digunakan dari data *train*.
+
+```{r eval=FALSE}
+set.seed(100)
+ctrl <- trainControl(method = "repeatedcv",
+                     number = 5,
+                     repeats = 3)
+model_forest <- train(Churn ~ .,
+                      data = data_train,
+                      method = "rf",
+                      trControl = ctrl)
+# saveRDS(model_forest, "assets/model_forest.rds")
+```
+
+Chunk di atas membutuhkan waktu yang cukup lama untuk dieksekusi. Untuk mempersingkat waktu, mari load model yang sebelumnya sudah disimpan ke dalam bentuk file RDS.
+
+```{r}
+model_forest <- readRDS("assets/model_forest.rds")
+model_forest
+```
+
+Untuk saat ini, kita memperoleh model *Random Forest* dengan tingkat akurasi di data train sebesar **78,38%** dengan nilai **mtry optimum sebanyak 2**.
+
+Selanjutnya kita akan melakukan *tuning model* dengan melakukan *upsampling*, yang artinya kita akan menyetarakan proporsi target variabel menjadi sama besar.
+
+```{r}
+data_train_up <- upSample(x = data_train[, -20],
+                          y = data_train$Churn,
+                          yname = "Churn")
+
+# cek proporsi
+prop.table(table(data_train_up$Churn))
+```
+
+Dari data yang sudah dilakukan *upsampling*, kita akan membuat ulang model *Random Forest*nya.
+
+```{r eval=FALSE}
+set.seed(100)
+ctrl <- trainControl(method = "repeatedcv",
+                     number = 5,
+                     repeats = 3)
+model_forest_up <- train(Churn ~ .,
+                         data = data_train_up,
+                         method = "rf",
+                         trControl = ctrl)
+# saveRDS(model_forest_up, "assets/model_forest_up.rds")
+```
+
+Untuk mempersingkat waktu, mari load model yang sebelumnya sudah disimpan ke dalam bentuk file RDS.
+
+```{r}
+model_forest_up <- readRDS("assets/model_forest_up.rds")
+model_forest_up
+```
+
+Setelah dilakukan *upsampling*, terlihat bahwa nilai akurasi di data train meningkat menjadi **89,11%** dengan nilai **mtry optimum sebanyak 16**.
+
+## Model Evaluation
+
+Terakhir, mari kita uji model random forest yang telah kita buat ke data test. Pada kasus ini, kita ingin memperoleh nilai recall atau sensitivitas yang sebesar mungkin agar model kita dapat mendeteksi pelanggan yang sebenarnya Churn sebanyak-banyaknya.
+
+```{r}
+pred <- predict(model_forest_up, newdata = data_test, type = "prob")
+pred$result <- as.factor(ifelse(pred$Yes > 0.45, "Yes", "No"))
+confusionMatrix(pred$result, data_test$Churn, positive = "Yes")
+```
+
+Dengan menggunakan threshold 0.45, diperoleh recall sebesar **70,78%** dengan akurasi sebesar **79,22%**.
+
+Selain menggunakan confusion matrix, kita dapat membentuk kurva ROC beserta nilai AUC dengan menggunakan *package* `ROCR` sebagai berikut:
+
+```{r}
+pred_prob <- predict(object = model_forest_up, newdata = data_test, type = "prob")
+pred <-  prediction(pred_prob[,2], labels = data_test$Churn)
+perf <- performance(prediction.obj = pred, measure = "tpr", x.measure = "fpr")
+plot(perf)
+```
+
+```{r}
+auc <- performance(pred, measure = "auc")
+auc@y.values[[1]]
+```
+
+Nilai AUC di atas menyatakan bahwa performa model kita sebesar **85,13%** dalam memisahkan distribusi kelas positif `Churn` dengan negatif pada data test.
+
+# Conclusion
+
+Dengan adanya model untuk memprediksi *customer churn*, pihak perusahaan telekomunikasi dengan mudah mengetahui pelanggan mana yang memiliki kecenderungan untuk *churn*. 
+
+Visualisasi berikut memperlihatkan hasil prediksi untuk dua pelanggan. Kedua pelanggan tersebut memiliki peluang yang cukup besar untuk *churn* dan kita juga dapat mengetahui variabel mana saja yang mendukung (*supports*) dan bertentangan (*contradicts*) terhadap hasil prediksi model.
+
+```{r}
+library(lime)
+test_x <- data_test %>% 
+  dplyr::select(-Churn)
+
+explainer <- lime(test_x, model_forest_up)
+explanation <- lime::explain(test_x[1:2,],
+                             explainer, 
+                             labels = c("Yes"),
+                             n_features = 8)
+plot_features(explanation)
+```
+
+Dapat disimpulkan bahwa alasan terkuat kedua pelanggan tersebut berpeluang besar akan *churn* karena memiliki kontrak yang bersifat bulanan dan *tenure* yang masih dibawah 8 bulan. Dari sini, pihak *marketing* dapat melakukan promosi produk dengan sifat kontrak yang jangkanya lebih panjang sehingga kedua pelanggan ini dapat bertahan lebih lama.
+
+# External Resources
+
+- Reference: [Algoritma Book: ML Application in Industry](https://algoml-industry.netlify.app/)
+- Dataset: [Kaggle: Telco Customer Churn](https://www.kaggle.com/blastchar/telco-customer-churn)
+- Repository: [GitHub: tomytjandra](https://github.com/tomytjandra/telco-customer-churn)
